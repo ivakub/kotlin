@@ -101,9 +101,9 @@ jobs:
               .[]
               | ("dependabot-alert:" + $repo + "#" + (.number|tostring)) as $m
               | "Alert: \(.html_url)\n"
-                + "File: \(.dependency.manifest_path // "unknown")\n"
-                + "Affected versions: \(.security_vulnerability.vulnerable_version_range // "unknown")\n"
-                + "Patched version: \(.security_vulnerability.first_patched_version.identifier // "unknown")\n"
+                + "File: \(.dependency.manifest_path // \"unknown\")\n"
+                + "Affected versions: \(.security_vulnerability.vulnerable_version_range // \"unknown\")\n"
+                + "Patched version: \(.security_vulnerability.first_patched_version.identifier // \"unknown\")\n"
                 + "\n"
                 + $m
                 + "\n\n"
