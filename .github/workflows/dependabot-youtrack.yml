@@ -90,15 +90,27 @@ jobs:
           payload_file="$(mktemp)"
           printf '%s' "$payload" > "$payload_file"
 
-          curl -sS \
-            --http1.1 \
-            -H "Expect:" \
-            -X POST \
-            -H "Authorization: Bearer ${YT_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/json" \
-            --data-binary @"$payload_file" \
-            "${YT_BASE_URL}/api/issues?fields=idReadable,summary" \
-            | jq -r '"Created: " + (.idReadable // "unknown") + " — " + (.summary // "")'
+          response="$(
+            curl -sS \
+              --http1.1 \
+              -H "Expect:" \
+              -X POST \
+              -H "Authorization: Bearer ${YT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              --data-binary @"$payload_file" \
+              "${YT_BASE_URL}/api/issues?fields=idReadable,id,summary"
+          )"
+
+          id="$(echo "$response" | jq -r '.idReadable // .id // empty')"
+          summary_out="$(echo "$response" | jq -r '.summary // empty')"
+
+          if [ -z "$id" ]; then
+            echo "YouTrack response:"
+            echo "$response"
+            exit 1
+          fi
+
+          echo "Created: $id — $summary_out"
 
           rm -f "$payload_file"
