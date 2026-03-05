@@ -33,7 +33,6 @@ jobs:
               "https://api.github.com/repos/${REPO}/dependabot/alerts?state=open&per_page=100"
           )"
 
-          # 20 newest + changed in last 24h -> group by package+summary
           echo "$alerts" | jq -c '
             (if type=="array" then . else [] end)
             | map(select(type=="object"))
@@ -45,12 +44,14 @@ jobs:
             | .[]
           ' | while read -r group; do
 
-            # Skip alerts already present in YouTrack (per-alert marker in description)
             kept='[]'
             while read -r a; do
               num="$(echo "$a" | jq -r '.number')"
               marker="dependabot-alert:${REPO}#${num}"
-              q="$(urlenc "project: ${YT_KT_PROJECT_SHORTNAME} # {${marker}}")"
+
+              # search by marker in summary
+              q="$(urlenc "project: ${YT_KT_PROJECT_SHORTNAME} summary: {${marker}}")"
+
               existing="$(
                 curl -sS \
                   --http1.1 \
@@ -59,6 +60,7 @@ jobs:
                   -H "Accept: application/json" \
                   "${YT_BASE_URL}/api/issues?fields=idReadable&query=${q}"
               )"
+
               if [ "$(echo "$existing" | jq length)" -gt 0 ]; then
                 echo "Skip existing alert #$num"
               else
@@ -85,15 +87,17 @@ jobs:
               esac
             )"
 
-            summary="[Dependabot] ${numbers} ${title}"
+            # put markers into summary so summary: {marker} works
+            markers_in_summary="$(echo "$kept" | jq -r --arg repo "$REPO" 'map("dependabot-alert:" + $repo + "#" + (.number|tostring)) | join(" ")')"
+            summary="[Dependabot] ${numbers} ${title} ${markers_in_summary}"
 
             alerts_block="$(echo "$kept" | jq -r --arg repo "$REPO" '
               .[]
               | ("dependabot-alert:" + $repo + "#" + (.number|tostring)) as $m
               | "Alert: \(.html_url)\n"
-                + "File: \(.dependency.manifest_path // \"unknown\")\n"
-                + "Affected versions: \(.security_vulnerability.vulnerable_version_range // \"unknown\")\n"
-                + "Patched version: \(.security_vulnerability.first_patched_version.identifier // \"unknown\")\n"
+                + "File: \(.dependency.manifest_path // 'unknown')\n"
+                + "Affected versions: \(.security_vulnerability.vulnerable_version_range // 'unknown')\n"
+                + "Patched version: \(.security_vulnerability.first_patched_version.identifier // 'unknown')\n"
                 + "\n"
                 + $m
                 + "\n\n"
