@@ -34,9 +34,12 @@ jobs:
               "https://api.github.com/repos/${REPO}/dependabot/alerts?state=open&per_page=100"
           )"
 
-          # take only 20 newest alerts by updated_at (fallback to created_at)
           alerts_20="$(echo "$alerts" | jq -c '
-            sort_by(.updated_at // .created_at) | reverse | .[:20]
+            (if type == "array" then . else [] end)
+            | map(select(type == "object"))
+            | sort_by(((.updated_at // .created_at) // ""))
+            | reverse
+            | .[:20]
           ')"
 
           new_alerts="$(echo "$alerts_20" | jq --arg since "$SINCE" '
@@ -87,10 +90,10 @@ jobs:
             priority="$(
               case "$(echo "$severity" | tr '[:lower:]' '[:upper:]')" in
                 CRITICAL) echo "Critical" ;;
-                HIGH)     echo "Major" ;;
-                MODERATE) echo "Normal" ;;
-                LOW)      echo "Minor" ;;
-                *)        echo "Normal" ;;
+                HIGH)     echo "High" ;;
+                MODERATE) echo "Medium" ;;
+                LOW)      echo "Low" ;;
+                *)        echo "Medium" ;;
               esac
             )"
 
