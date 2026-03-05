@@ -1,4 +1,4 @@
-name: Dependabot alerts -> YouTrack (grouped, priority)
+name: Dependabot alerts -> YouTrack (grouped, dedup, priority)
 
 on:
   schedule:
@@ -23,6 +23,7 @@ jobs:
           set -euo pipefail
           YT_BASE_URL="${YT_BASE_URL%/}"
           SINCE="$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
+          urlenc() { jq -nr --arg s "$1" '$s|@uri'; }
 
           alerts="$(
             curl -sS \
@@ -32,6 +33,7 @@ jobs:
               "https://api.github.com/repos/${REPO}/dependabot/alerts?state=open&per_page=100"
           )"
 
+          # 20 newest + changed in last 24h -> group by package+summary
           echo "$alerts" | jq -c '
             (if type=="array" then . else [] end)
             | map(select(type=="object"))
@@ -41,21 +43,37 @@ jobs:
             | sort_by(.dependency.package.name, .security_advisory.summary)
             | group_by(.dependency.package.name + "|" + .security_advisory.summary)
             | .[]
-            | {
-                numbers: (map(.number) | sort),
-                title: (.[0].security_advisory.summary // (.[0].dependency.package.name // "unknown")),
-                severity: (.[0].security_advisory.severity // "unknown"),
-                items: map({
-                  url: .html_url,
-                  file: (.dependency.manifest_path // "unknown"),
-                  affected: (.security_vulnerability.vulnerable_version_range // "unknown"),
-                  patched: (.security_vulnerability.first_patched_version.identifier // "unknown")
-                })
-              }
           ' | while read -r group; do
-            numbers="$(echo "$group" | jq -r '.numbers | map("#"+tostring) | join(" ")')"
-            title="$(echo "$group" | jq -r '.title')"
-            severity="$(echo "$group" | jq -r '.severity')"
+
+            # Skip alerts already present in YouTrack (per-alert marker in description)
+            kept='[]'
+            while read -r a; do
+              num="$(echo "$a" | jq -r '.number')"
+              marker="dependabot-alert:${REPO}#${num}"
+              q="$(urlenc "project: ${YT_KT_PROJECT_SHORTNAME} # {${marker}}")"
+              existing="$(
+                curl -sS \
+                  --http1.1 \
+                  -H "Expect:" \
+                  -H "Authorization: Bearer ${YT_KOTLIN_SUPPORT_TOKEN}" \
+                  -H "Accept: application/json" \
+                  "${YT_BASE_URL}/api/issues?fields=idReadable&query=${q}"
+              )"
+              if [ "$(echo "$existing" | jq length)" -gt 0 ]; then
+                echo "Skip existing alert #$num"
+              else
+                kept="$(jq -c --argjson a "$a" '. + [$a]' <<<"$kept")"
+              fi
+            done < <(echo "$group" | jq -c '.[]')
+
+            if [ "$(echo "$kept" | jq length)" -eq 0 ]; then
+              echo "All alerts in group already exist, skipping group"
+              continue
+            fi
+
+            numbers="$(echo "$kept" | jq -r 'map(.number) | sort | map("#"+tostring) | join(" ")')"
+            title="$(echo "$kept" | jq -r '.[0].security_advisory.summary // (.[0].dependency.package.name // "unknown")')"
+            severity="$(echo "$kept" | jq -r '.[0].security_advisory.severity // "unknown"')"
 
             priority="$(
               case "$(echo "$severity" | tr '[:lower:]' '[:upper:]')" in
@@ -69,12 +87,16 @@ jobs:
 
             summary="[Dependabot] ${numbers} ${title}"
 
-            alerts_block="$(echo "$group" | jq -r '
-              .items[]
-              | "Alert: \(.url)\n"
-                + "File: \(.file)\n"
-                + "Affected versions: \(.affected)\n"
-                + "Patched version: \(.patched)\n\n"
+            alerts_block="$(echo "$kept" | jq -r --arg repo "$REPO" '
+              .[]
+              | ("dependabot-alert:" + $repo + "#" + (.number|tostring)) as $m
+              | "Alert: \(.html_url)\n"
+                + "File: \(.dependency.manifest_path // \"unknown\")\n"
+                + "Affected versions: \(.security_vulnerability.vulnerable_version_range // \"unknown\")\n"
+                + "Patched version: \(.security_vulnerability.first_patched_version.identifier // \"unknown\")\n"
+                + "\n"
+                + $m
+                + "\n\n"
             ')"
 
             payload="$(jq -n \
