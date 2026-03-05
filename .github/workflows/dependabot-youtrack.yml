@@ -14,10 +14,10 @@ jobs:
     steps:
       - name: Create grouped YouTrack issues for Dependabot alerts
         env:
-          GH_DEPENDABOT_TOKEN: ${{ secrets.GH_DEPENDABOT_TOKEN }}
+          GH_DEPENDABOT_TOKEN: ${{ secrets.GH_TOKEN }}
           YT_BASE_URL: ${{ secrets.YT_BASE_URL }}
-          YT_KOTLIN_SUPPORT_TOKEN: ${{ secrets.YT_KOTLIN_SUPPORT_TOKEN }}
-          YT_KT_PROJECT_SHORTNAME: ${{ secrets.YT_KT_PROJECT_SHORTNAME }}
+          YT_KOTLIN_SUPPORT_TOKEN: ${{ secrets.YT_TOKEN }}
+          YT_KT_PROJECT_SHORTNAME: ${{ secrets.YT_PROJECT_SHORTNAME }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
