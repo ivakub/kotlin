@@ -34,7 +34,12 @@ jobs:
               "https://api.github.com/repos/${REPO}/dependabot/alerts?state=open&per_page=100"
           )"
 
-          new_alerts="$(echo "$alerts" | jq --arg since "$SINCE" '
+          # take only 20 newest alerts by updated_at (fallback to created_at)
+          alerts_20="$(echo "$alerts" | jq -c '
+            sort_by(.updated_at // .created_at) | reverse | .[:20]
+          ')"
+
+          new_alerts="$(echo "$alerts_20" | jq --arg since "$SINCE" '
             map(select((.created_at >= $since) or (.updated_at >= $since)))
           ')"
 
@@ -43,18 +48,6 @@ jobs:
             | group_by(.dependency.package.name + "|" + .security_advisory.summary)[]
           ' | while read -r group; do
 
-            group_filtered="$(
-              echo "$group" | jq -c --arg proj "$YT_KT_PROJECT_SHORTNAME" --arg repo "$REPO" '
-                map(.)
-              '
-            )"
-
-            # Filter out alerts that already have a YouTrack issue (search by per-alert marker)
-            group_filtered="$(
-              echo "$group_filtered" | jq -c '.'
-            )"
-
-            # Build a list of alerts to include, skipping ones already present in YouTrack
             kept='[]'
             while read -r a; do
               num="$(echo "$a" | jq -r '.number')"
@@ -91,7 +84,6 @@ jobs:
 
             summary="[Dependabot] ${numbers} ${title}"
 
-            # Map GitHub severity -> YouTrack Priority
             priority="$(
               case "$(echo "$severity" | tr '[:lower:]' '[:upper:]')" in
                 CRITICAL) echo "Critical" ;;
