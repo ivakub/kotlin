@@ -1,8 +1,8 @@
-name: Dependabot alerts -> YouTrack (grouped, dedup, priority)
+name: Dependabot alerts -> YouTrack (grouped, priority)
 
 on:
   schedule:
-    - cron: "15 18 * * *"
+    - cron: "15 6 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -21,10 +21,8 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-
           YT_BASE_URL="${YT_BASE_URL%/}"
           SINCE="$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
-          urlenc() { jq -nr --arg s "$1" '$s|@uri'; }
 
           alerts="$(
             curl -sS \
@@ -34,58 +32,30 @@ jobs:
               "https://api.github.com/repos/${REPO}/dependabot/alerts?state=open&per_page=100"
           )"
 
-          alerts_20="$(echo "$alerts" | jq -c '
-            (if type == "array" then . else [] end)
-            | map(select(type == "object"))
-            | sort_by(((.updated_at // .created_at) // ""))
-            | reverse
+          echo "$alerts" | jq -c '
+            (if type=="array" then . else [] end)
+            | map(select(type=="object"))
+            | sort_by(.updated_at // .created_at) | reverse
             | .[:20]
-          ')"
-
-          new_alerts="$(echo "$alerts_20" | jq --arg since "$SINCE" '
-            map(select((.created_at >= $since) or (.updated_at >= $since)))
-          ')"
-
-          echo "$new_alerts" | jq -c '
-            sort_by(.dependency.package.name, .security_advisory.summary)
-            | group_by(.dependency.package.name + "|" + .security_advisory.summary)[]
+            | map(select((.created_at >= env.SINCE) or (.updated_at >= env.SINCE)))
+            | sort_by(.dependency.package.name, .security_advisory.summary)
+            | group_by(.dependency.package.name + "|" + .security_advisory.summary)
+            | .[]
+            | {
+                numbers: (map(.number) | sort),
+                title: (.[0].security_advisory.summary // (.[0].dependency.package.name // "unknown")),
+                severity: (.[0].security_advisory.severity // "unknown"),
+                items: map({
+                  url: .html_url,
+                  file: (.dependency.manifest_path // "unknown"),
+                  affected: (.security_vulnerability.vulnerable_version_range // "unknown"),
+                  patched: (.security_vulnerability.first_patched_version.identifier // "unknown")
+                })
+              }
           ' | while read -r group; do
-
-            kept='[]'
-            while read -r a; do
-              num="$(echo "$a" | jq -r '.number')"
-              marker="dependabot-alert:${REPO}#${num}"
-              q="$(urlenc "project: ${YT_KT_PROJECT_SHORTNAME} # {${marker}}")"
-              existing="$(
-                curl -sS \
-                  --http1.1 \
-                  -H "Expect:" \
-                  -H "Authorization: Bearer ${YT_KOTLIN_SUPPORT_TOKEN}" \
-                  -H "Accept: application/json" \
-                  "${YT_BASE_URL}/api/issues?fields=idReadable&query=${q}"
-              )"
-              if [ "$(echo "$existing" | jq length)" -gt 0 ]; then
-                echo "Skip existing alert #$num"
-              else
-                kept="$(jq -c --argjson a "$a" '. + [$a]' <<<"$kept")"
-              fi
-            done < <(echo "$group" | jq -c '.[]')
-
-            if [ "$(echo "$kept" | jq length)" -eq 0 ]; then
-              echo "All alerts in group already exist, skipping group"
-              continue
-            fi
-
-            numbers="$(echo "$kept" | jq -r 'map(.number) | sort | map("#"+tostring) | join(" ")')"
-            pkg="$(echo "$kept" | jq -r '.[0].dependency.package.name // "unknown"')"
-            title="$(echo "$kept" | jq -r '.[0].security_advisory.summary // empty')"
-            severity="$(echo "$kept" | jq -r '.[0].security_advisory.severity // "unknown"')"
-
-            if [ -z "$title" ]; then
-              title="$pkg"
-            fi
-
-            summary="[Dependabot] ${numbers} ${title}"
+            numbers="$(echo "$group" | jq -r '.numbers | map("#"+tostring) | join(" ")')"
+            title="$(echo "$group" | jq -r '.title')"
+            severity="$(echo "$group" | jq -r '.severity')"
 
             priority="$(
               case "$(echo "$severity" | tr '[:lower:]' '[:upper:]')" in
@@ -97,16 +67,14 @@ jobs:
               esac
             )"
 
-            alerts_block="$(echo "$kept" | jq -r --arg repo "$REPO" '
-              .[]
-              | ("dependabot-alert:" + $repo + "#" + (.number|tostring)) as $m
-              | "Alert: \(.html_url)\n"
-                + "File: \(.dependency.manifest_path // \"unknown\")\n"
-                + "Affected versions: \(.security_vulnerability.vulnerable_version_range // \"unknown\")\n"
-                + "Patched version: \(.security_vulnerability.first_patched_version.identifier // \"unknown\")\n"
-                + "\n"
-                + $m
-                + "\n\n"
+            summary="[Dependabot] ${numbers} ${title}"
+
+            alerts_block="$(echo "$group" | jq -r '
+              .items[]
+              | "Alert: \(.url)\n"
+                + "File: \(.file)\n"
+                + "Affected versions: \(.affected)\n"
+                + "Patched version: \(.patched)\n\n"
             ')"
 
             payload="$(jq -n \
@@ -119,33 +87,24 @@ jobs:
                 summary: $summary,
                 description: $desc,
                 customFields: [
-                  {
-                    name: "Type",
-                    "$type": "SingleEnumIssueCustomField",
-                    value: { name: "Task" }
-                  },
-                  {
-                    name: "Priority",
-                    "$type": "SingleEnumIssueCustomField",
-                    value: { name: $priority }
-                  }
+                  { name: "Type", "$type": "SingleEnumIssueCustomField", value: { name: "Task" } },
+                  { name: "Priority", "$type": "SingleEnumIssueCustomField", value: { name: $priority } }
                 ]
               }'
             )"
 
-            payload_file="$(mktemp)"
-            printf '%s' "$payload" > "$payload_file"
+            tmp="$(mktemp)"
+            printf '%s' "$payload" > "$tmp"
 
             curl -sS \
               --http1.1 \
               -H "Expect:" \
-              -X POST \
               -H "Authorization: Bearer ${YT_KOTLIN_SUPPORT_TOKEN}" \
               -H "Content-Type: application/json" \
               -H "Accept: application/json" \
-              --data-binary @"$payload_file" \
+              --data-binary @"$tmp" \
               "${YT_BASE_URL}/api/issues?fields=idReadable,id,summary" \
               | jq -r '"Created: " + (.idReadable // .id // "unknown") + " — " + (.summary // "")'
 
-            rm -f "$payload_file"
+            rm -f "$tmp"
           done
