@@ -62,9 +62,9 @@ jobs:
               case "$(echo "$severity" | tr '[:lower:]' '[:upper:]')" in
                 CRITICAL) echo "Critical" ;;
                 HIGH) echo "High" ;;
-                MODERATE) echo "Medium" ;;
-                LOW) echo "Low" ;;
-                *) echo "Medium" ;;
+                MODERATE) echo "Normal" ;;
+                LOW) echo "Minor" ;;
+                *) echo "Normal" ;;
               esac
             )"
 
