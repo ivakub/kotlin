@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           YT_BASE_URL="${YT_BASE_URL%/}"
-          SINCE="$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
+          SINCE="$(date -u -d '48 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
 
           alerts="$(
             curl -sS \
@@ -102,18 +102,43 @@ jobs:
               }'
             )"
 
-            tmp="$(mktemp)"
-            printf '%s' "$payload" > "$tmp"
+            tmp_payload="$(mktemp)"
+            tmp_resp="$(mktemp)"
+            printf '%s' "$payload" > "$tmp_payload"
 
-            curl -sS \
-              --http1.1 \
-              -H "Expect:" \
-              -H "Authorization: Bearer ${YT_KOTLIN_SUPPORT_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -H "Accept: application/json" \
-              --data-binary @"$tmp" \
-              "${YT_BASE_URL}/api/issues?fields=idReadable,id,summary" \
-              | jq -r '"Created: " + (.idReadable // .id // "unknown") + " — " + (.summary // "")'
+            status="$(
+              curl -sS \
+                --http1.1 \
+                -H "Expect:" \
+                -H "Authorization: Bearer ${YT_KOTLIN_SUPPORT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -H "Accept: application/json" \
+                --data-binary @"$tmp_payload" \
+                -o "$tmp_resp" \
+                -w "%{http_code}" \
+                "${YT_BASE_URL}/api/issues?fields=idReadable,id,summary"
+            )"
 
-            rm -f "$tmp"
+            echo "YouTrack HTTP: $status"
+
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              echo "YouTrack response:"
+              cat "$tmp_resp"
+              rm -f "$tmp_payload" "$tmp_resp"
+              exit 1
+            fi
+
+            issue_id="$(jq -r '.idReadable // .id // empty' < "$tmp_resp")"
+            issue_summary="$(jq -r '.summary // empty' < "$tmp_resp")"
+
+            if [ -z "$issue_id" ]; then
+              echo "Unexpected YouTrack response:"
+              cat "$tmp_resp"
+              rm -f "$tmp_payload" "$tmp_resp"
+              exit 1
+            fi
+
+            echo "Created: $issue_id — $issue_summary"
+
+            rm -f "$tmp_payload" "$tmp_resp"
           done
