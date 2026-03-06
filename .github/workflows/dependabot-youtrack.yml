@@ -61,7 +61,7 @@ jobs:
             priority="$(
               case "$(echo "$severity" | tr '[:lower:]' '[:upper:]')" in
                 CRITICAL) echo "Critical" ;;
-                HIGH) echo "High" ;;
+                HIGH) echo "Major" ;;
                 MODERATE) echo "Normal" ;;
                 LOW) echo "Minor" ;;
                 *) echo "Normal" ;;
